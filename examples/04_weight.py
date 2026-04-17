@@ -1,4 +1,4 @@
-from libraries.mux04 import LineSensor
+from mux04 import LineSensor
 import time
 
 sensor = LineSensor()

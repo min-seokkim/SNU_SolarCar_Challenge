@@ -8,12 +8,13 @@ import os
 UDP_IP = "0.0.0.0" 
 UDP_PORT = 5005
 FILE_NAME = "sensor_data.csv"
+CSV_HEADER = ['Timestamp', 'V1(V)', 'I1(mA)', 'V2(V)', 'I2(mA)', 'LeftCmd', 'RightCmd']
 
 # --- 2. CSV 파일 초기화 (머리글 작성) ---
 if not os.path.exists(FILE_NAME):
     with open(FILE_NAME, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Timestamp', 'V1(V)', 'I1(mA)', 'V2(V)', 'I2(mA)'])
+        writer.writerow(CSV_HEADER)
 
 # --- 3. 소켓 설정 ---
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -36,11 +37,20 @@ try:
             
             try:
                 # 수신 데이터 파싱
-                v1_s, c1_s, v2_s, c2_s = message.split(',')
+                parts = message.split(',')
+                if len(parts) == 6:
+                    v1_s, c1_s, v2_s, c2_s, left_cmd_s, right_cmd_s = parts
+                elif len(parts) == 4:
+                    v1_s, c1_s, v2_s, c2_s = parts
+                    left_cmd_s, right_cmd_s = "", ""
+                else:
+                    raise ValueError
                 
                 # 숫자 변환 및 mA 단위 변환
                 v1, c1 = float(v1_s), float(c1_s)
                 v2, c2 = float(v2_s), float(c2_s)
+                left_cmd = float(left_cmd_s) if left_cmd_s else None
+                right_cmd = float(right_cmd_s) if right_cmd_s else None
                 
                 # 현재 시간
                 now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -48,10 +58,21 @@ try:
                 # --- 4. CSV 파일에 데이터 추가 ---
                 with open(FILE_NAME, mode='a', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
-                    writer.writerow([now_str, f"{v1:.3f}", f"{c1:.1f}", f"{v2:.3f}", f"{c2:.1f}"])
+                    writer.writerow([
+                        now_str,
+                        f"{v1:.3f}",
+                        f"{c1:.1f}",
+                        f"{v2:.3f}",
+                        f"{c2:.1f}",
+                        "" if left_cmd is None else f"{left_cmd:.1f}",
+                        "" if right_cmd is None else f"{right_cmd:.1f}",
+                    ])
                 
                 # 화면 출력
-                print(f"[{now_str}] Saved: A={v1:.2f}V/{c1:.1f}mA, B={v2:.2f}V/{c2:.1f}mA")
+                if left_cmd is None or right_cmd is None:
+                    print(f"[{now_str}] Saved: A={v1:.2f}V/{c1:.1f}mA, B={v2:.2f}V/{c2:.1f}mA")
+                else:
+                    print(f"[{now_str}] Saved: A={v1:.2f}V/{c1:.1f}mA, B={v2:.2f}V/{c2:.1f}mA, L/R={left_cmd:.1f}/{right_cmd:.1f}")
                 
                 # 저장을 완료했으므로 타이머를 현재 시간으로 리셋
                 last_save_time = current_time

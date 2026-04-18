@@ -83,6 +83,8 @@ except Exception as e:
 wifi_status = connect_wifi()
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 last_send_time = time.ticks_ms()
+motor_left_command = 0
+motor_right_command = 0
 
 # --- 3. 메인 주행 루프 ---
 try:
@@ -130,7 +132,9 @@ try:
 
             left_speed = clamp(drive_speed + steering, -max_speed, max_speed)
             right_speed = clamp(drive_speed - steering, -max_speed, max_speed)
-            motor.set_speed(left_speed, right_speed)
+            motor_left_command = left_speed
+            motor_right_command = right_speed
+            motor.set_speed(motor_left_command, motor_right_command)
         else:
             current_time = time.ticks_ms()
             if lost_line_start_time is None:
@@ -150,9 +154,13 @@ try:
 
                 left_speed = clamp(fallback_speed + fallback_turn * turn_direction, -max_speed, max_speed)
                 right_speed = clamp(fallback_speed - fallback_turn * turn_direction, -max_speed, max_speed)
-                motor.set_speed(left_speed, right_speed)
+                motor_left_command = left_speed
+                motor_right_command = right_speed
+                motor.set_speed(motor_left_command, motor_right_command)
             else:
-                motor.set_speed(0, 0) 
+                motor_left_command = 0
+                motor_right_command = 0
+                motor.set_speed(motor_left_command, motor_right_command) 
 
         # --- B. INA226 데이터 읽기 및 Wi-Fi 송신 (0.5초마다) ---
         current_time = time.ticks_ms()
@@ -163,7 +171,7 @@ try:
                 
                 if None not in (v1, ma1, v2, ma2):
                     if wifi_status:
-                        message = f"{v1:.3f},{ma1*1000:.1f},{v2:.3f},{ma2*1000:.1f}"
+                        message = f"{v1:.3f},{ma1*1000:.1f},{v2:.3f},{ma2*1000:.1f},{motor_left_command:.1f},{motor_right_command:.1f}"
                         sock.sendto(message.encode(), (PC_IP, PC_PORT))
                         print(f"전송 -> 0x40: {v1:.2f}V/{ma1*1000:.0f}mA | 0x41: {v2:.2f}V/{ma2*1000:.0f}mA")
                 else:

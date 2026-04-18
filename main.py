@@ -123,6 +123,9 @@ race_duration_ms = 20 * 60 * 1000
 estimated_solar_scan_ms = 5000
 charge_finish_margin_ms = 5000
 charge_request_deadband_ms = 60000
+late_charge_disable_remaining_ms = 2 * 60 * 1000
+late_charge_limited_remaining_ms = 5 * 60 * 1000
+late_charge_max_stop_ms = 30000
 battery_full_voltage_v = 4.20
 battery_cutoff_voltage_v = 2.80
 battery_nominal_voltage_v = 3.70
@@ -268,13 +271,26 @@ def race_remaining_ms(current_time):
     remaining_ms = race_duration_ms - elapsed_ms
     return int(clamp(remaining_ms, 0, race_duration_ms))
 
+def charge_cap_for_remaining_time(remaining_ms):
+    if remaining_ms <= late_charge_disable_remaining_ms:
+        return 0
+
+    if remaining_ms <= late_charge_limited_remaining_ms:
+        return late_charge_max_stop_ms
+
+    return charge_max_stop_ms
+
 def charge_duration_for_voltage(voltage_v, current_time):
     remaining_ms = race_remaining_ms(current_time)
     max_charge_ms = remaining_ms - estimated_solar_scan_ms - charge_finish_margin_ms
     if max_charge_ms <= 0:
         return 0
 
-    max_charge_ms = int(clamp(max_charge_ms, 0, charge_max_stop_ms))
+    time_based_charge_cap_ms = charge_cap_for_remaining_time(remaining_ms)
+    max_charge_ms = int(clamp(max_charge_ms, 0, time_based_charge_cap_ms))
+    if max_charge_ms <= 0:
+        return 0
+
     if voltage_v is None:
         return int(clamp(charge_stop_ms, 0, max_charge_ms))
 
@@ -296,7 +312,8 @@ def charge_duration_for_voltage(voltage_v, current_time):
         / (motor_power_w + solar_charge_power_w)
         * 3600000
     )
-    if charge_ms <= charge_request_deadband_ms:
+    effective_deadband_ms = min(charge_request_deadband_ms, max_charge_ms)
+    if charge_ms <= effective_deadband_ms:
         return 0
 
     charge_ms = int(clamp(charge_ms, charge_min_stop_ms, max_charge_ms))

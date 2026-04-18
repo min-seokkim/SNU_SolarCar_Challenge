@@ -87,6 +87,7 @@ try:
         error_sum = 0
         active_count = 0
         steering = 0
+        channels = [1-c for c in channels]
         
         for i in range(8):
             if channels[i] == 1:

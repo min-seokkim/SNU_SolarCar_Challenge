@@ -53,10 +53,15 @@ max_speed = 100
 min_speed = 45
 slowdown_gain = 0.6
 integral_limit = 100
+fallback_timeout_ms = 700
+fallback_speed = 35
+fallback_turn = 55
 pid_integral = 0
 pid_previous_error = 0
 pid_has_previous_error = False
 last_pid_time = time.ticks_ms()
+last_seen_steering = 0
+lost_line_start_time = None
 
 def clamp(value, min_value, max_value):
     if value < min_value:
@@ -117,6 +122,8 @@ try:
             steering = (kp * error) + (ki * pid_integral) + (kd * derivative)
             pid_previous_error = error
             pid_has_previous_error = True
+            last_seen_steering = steering
+            lost_line_start_time = None
 
             slowdown = min(abs(error) * slowdown_gain, base_speed - min_speed)
             drive_speed = base_speed - slowdown
@@ -125,11 +132,27 @@ try:
             right_speed = clamp(drive_speed - steering, -max_speed, max_speed)
             motor.set_speed(left_speed, right_speed)
         else:
+            current_time = time.ticks_ms()
+            if lost_line_start_time is None:
+                lost_line_start_time = current_time
+
             pid_integral = 0
             pid_previous_error = 0
             pid_has_previous_error = False
             last_pid_time = time.ticks_ms()
-            motor.set_speed(0, 0) 
+
+            lost_time_ms = time.ticks_diff(current_time, lost_line_start_time)
+            if lost_time_ms <= fallback_timeout_ms and last_seen_steering != 0:
+                if last_seen_steering > 0:
+                    turn_direction = 1
+                else:
+                    turn_direction = -1
+
+                left_speed = clamp(fallback_speed + fallback_turn * turn_direction, -max_speed, max_speed)
+                right_speed = clamp(fallback_speed - fallback_turn * turn_direction, -max_speed, max_speed)
+                motor.set_speed(left_speed, right_speed)
+            else:
+                motor.set_speed(0, 0) 
 
         # --- B. INA226 데이터 읽기 및 Wi-Fi 송신 (0.5초마다) ---
         current_time = time.ticks_ms()

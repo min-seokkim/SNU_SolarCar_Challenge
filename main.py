@@ -4,6 +4,7 @@ import time
 from drv8833 import DRV8833
 from mux04 import LineSensor
 from ina226 import INA226
+from myservo import myServo
 
 # --- 1. Wi-Fi 및 네트워크 설정 ---
 SSID = "Team06"
@@ -41,6 +42,7 @@ def connect_wifi():
 # --- 2. 하드웨어 초기화 
 sensor = LineSensor()
 motor = DRV8833()
+solar_servo = myServo(pin=10)
 
 ina_0x40 = INA226(address=0x40)
 ina_0x41 = INA226(address=0x41)
@@ -57,12 +59,20 @@ integral_limit = 100
 fallback_timeout_ms = 700
 fallback_speed = 35
 fallback_turn = 55
+charge_stop_ms = 10000
+solar_scan_start_angle = 45
+solar_scan_end_angle = 134
+solar_scan_step = 1
+solar_scan_speed = 10
+solar_scan_settle_ms = 80
 pid_integral = 0
 pid_previous_error = 0
 pid_has_previous_error = False
 last_pid_time = time.ticks_ms()
 last_seen_steering = 0
 lost_line_start_time = None
+stop_marker_armed = True
+charging_until_time = None
 
 def clamp(value, min_value, max_value):
     if value < min_value:
@@ -70,6 +80,35 @@ def clamp(value, min_value, max_value):
     if value > max_value:
         return max_value
     return value
+
+def scan_best_solar_angle():
+    best_angle = None
+    best_power = None
+
+    print("Solar scan start...")
+    for angle in range(solar_scan_start_angle, solar_scan_end_angle + 1, solar_scan_step):
+        solar_servo.myServoWriteAngle(angle, solar_scan_speed)
+        time.sleep_ms(solar_scan_settle_ms)
+
+        try:
+            voltage_v = ina_0x40.read_bus_voltage()
+            current_a = ina_0x40.read_shunt_current()
+            power_w = voltage_v * current_a
+        except Exception as e:
+            print("Solar scan read error:", e)
+            continue
+
+        if best_power is None or power_w > best_power:
+            best_power = power_w
+            best_angle = angle
+
+    if best_angle is not None:
+        solar_servo.myServoWriteAngle(best_angle, 15)
+        print(f"Solar scan done. Best angle={best_angle}, P1={best_power:.3f}W")
+    else:
+        print("Solar scan failed. Keeping current angle.")
+
+    return best_angle, best_power
 
 try:
     ina_0x40.configure(avg=4, busConvTime=4, shuntConvTime=4, mode=7)
@@ -105,8 +144,46 @@ try:
             if channels[i] == 1:
                 error_sum += weights[i]
                 active_count += 1
+        
+        current_time = time.ticks_ms()
+        stop_marker_detected = active_count == 8
+        skip_drive_control = False
+
+        if not stop_marker_detected:
+            stop_marker_armed = True
+
+        if stop_marker_detected and stop_marker_armed and charging_until_time is None:
+            stop_marker_armed = False
+            pid_integral = 0
+            pid_previous_error = 0
+            pid_has_previous_error = False
+            lost_line_start_time = None
+            motor_left_command = 0
+            motor_right_command = 0
+            motor.set_speed(motor_left_command, motor_right_command)
+            print("Stop marker detected. Optimizing solar angle...")
+            scan_best_solar_angle()
+            current_time = time.ticks_ms()
+            last_pid_time = current_time
+            charging_until_time = time.ticks_add(current_time, charge_stop_ms)
+            print("Charging...")
+
+        if charging_until_time is not None:
+            if time.ticks_diff(charging_until_time, current_time) > 0:
+                pid_integral = 0
+                pid_previous_error = 0
+                pid_has_previous_error = False
+                last_pid_time = current_time
+                lost_line_start_time = None
+                motor_left_command = 0
+                motor_right_command = 0
+                motor.set_speed(motor_left_command, motor_right_command)
+                skip_drive_control = True
+            else:
+                charging_until_time = None
+                print("Charging done. Resuming...")
                 
-        if active_count > 0:
+        if not skip_drive_control and active_count > 0:
             current_time = time.ticks_ms()
             dt_ms = time.ticks_diff(current_time, last_pid_time)
             if dt_ms <= 0:
@@ -138,7 +215,7 @@ try:
             motor_left_command = left_speed
             motor_right_command = right_speed
             motor.set_speed(motor_left_command, motor_right_command)
-        else:
+        elif not skip_drive_control:
             current_time = time.ticks_ms()
             if lost_line_start_time is None:
                 lost_line_start_time = current_time

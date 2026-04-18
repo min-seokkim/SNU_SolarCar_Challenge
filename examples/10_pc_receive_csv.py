@@ -8,7 +8,19 @@ import os
 UDP_IP = "0.0.0.0" 
 UDP_PORT = 5005
 FILE_NAME = "sensor_data.csv"
-CSV_HEADER = ['Timestamp', 'V1(V)', 'I1(mA)', 'V2(V)', 'I2(mA)', 'LeftCmd', 'RightCmd']
+CSV_HEADER = [
+    'Timestamp',
+    'V1(V)',
+    'I1(mA)',
+    'SolarInput_P1(W)',
+    'SolarInput_Energy_Wh',
+    'V2(V)',
+    'I2(mA)',
+    'MotorOutput_P2(W)',
+    'MotorOutput_Energy_Wh',
+    'LeftCmd',
+    'RightCmd',
+]
 
 # --- 2. CSV 파일 초기화 (머리글 작성) ---
 if not os.path.exists(FILE_NAME):
@@ -25,6 +37,9 @@ print("-" * 60)
 
 # 시간을 재기 위한 변수
 last_save_time = 0
+last_energy_time = None
+solar_input_energy_wh = 0.0
+motor_output_energy_wh = 0.0
 
 try:
     while True:
@@ -51,6 +66,14 @@ try:
                 v2, c2 = float(v2_s), float(c2_s)
                 left_cmd = float(left_cmd_s) if left_cmd_s else None
                 right_cmd = float(right_cmd_s) if right_cmd_s else None
+                solar_input_w = v1 * (c1 / 1000)
+                motor_output_w = v2 * (c2 / 1000)
+
+                if last_energy_time is not None:
+                    dt_hours = (current_time - last_energy_time) / 3600
+                    solar_input_energy_wh += solar_input_w * dt_hours
+                    motor_output_energy_wh += motor_output_w * dt_hours
+                last_energy_time = current_time
                 
                 # 현재 시간
                 now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -62,17 +85,21 @@ try:
                         now_str,
                         f"{v1:.3f}",
                         f"{c1:.1f}",
+                        f"{solar_input_w:.4f}",
+                        f"{solar_input_energy_wh:.6f}",
                         f"{v2:.3f}",
                         f"{c2:.1f}",
+                        f"{motor_output_w:.4f}",
+                        f"{motor_output_energy_wh:.6f}",
                         "" if left_cmd is None else f"{left_cmd:.1f}",
                         "" if right_cmd is None else f"{right_cmd:.1f}",
                     ])
                 
                 # 화면 출력
                 if left_cmd is None or right_cmd is None:
-                    print(f"[{now_str}] Saved: A={v1:.2f}V/{c1:.1f}mA, B={v2:.2f}V/{c2:.1f}mA")
+                    print(f"[{now_str}] Saved: Solar={solar_input_w:.3f}W/{solar_input_energy_wh:.5f}Wh, Motor={motor_output_w:.3f}W/{motor_output_energy_wh:.5f}Wh")
                 else:
-                    print(f"[{now_str}] Saved: A={v1:.2f}V/{c1:.1f}mA, B={v2:.2f}V/{c2:.1f}mA, L/R={left_cmd:.1f}/{right_cmd:.1f}")
+                    print(f"[{now_str}] Saved: Solar={solar_input_w:.3f}W/{solar_input_energy_wh:.5f}Wh, Motor={motor_output_w:.3f}W/{motor_output_energy_wh:.5f}Wh, L/R={left_cmd:.1f}/{right_cmd:.1f}")
                 
                 # 저장을 완료했으므로 타이머를 현재 시간으로 리셋
                 last_save_time = current_time

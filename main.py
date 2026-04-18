@@ -71,6 +71,7 @@ solar_scan_end_angle = 135
 solar_scan_step = 1
 solar_scan_speed = 10
 solar_scan_settle_ms = 80
+solar_scan_power_baseline_w = 0.15
 solar_scan_drop_count_limit = 5
 pid_integral = 0
 pid_previous_error = 0
@@ -112,6 +113,9 @@ def scan_best_solar_angle():
             power_w = voltage_v * current_a
         except Exception as e:
             print("Solar scan read error:", e)
+            continue
+
+        if power_w <= solar_scan_power_baseline_w:
             continue
 
         if best_power is None or power_w > best_power:

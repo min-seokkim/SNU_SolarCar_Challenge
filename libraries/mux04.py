@@ -56,7 +56,7 @@ class LineSensor:
 
     def get_error(self):
         channels = self.read_channels()
-        weights = [-40, -30, -20, -10, 10, 20, 30, 40]
+        weights = [-20, -15, -10, -5, 5, 10, 15, 20]
         error_sum = 0
         active_count = 0
         for i in range(8):

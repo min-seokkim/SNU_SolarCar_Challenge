@@ -48,8 +48,8 @@ ina_0x41 = INA226(address=0x41)
 kp = 0.8
 ki = 0.0
 kd = 0.2
-base_speed = 50
-max_speed = 80
+base_speed = 80
+max_speed = 100
 integral_limit = 100
 pid_integral = 0
 pid_previous_error = 0

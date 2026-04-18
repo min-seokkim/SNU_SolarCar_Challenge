@@ -6,7 +6,7 @@ from mux04 import LineSensor
 from ina226 import INA226
 
 # --- 1. Wi-Fi 및 네트워크 설정 ---
-SSID = "Team01"
+SSID = "Team06"
 PASSWORD = "12345678"
 PC_IP = "192.168.137.1"
 PC_PORT = 5005

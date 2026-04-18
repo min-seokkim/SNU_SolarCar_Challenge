@@ -128,7 +128,7 @@ battery_cutoff_voltage_v = 2.80
 battery_nominal_voltage_v = 3.70
 battery_capacity_ah = 0.110
 usable_battery_energy_wh = battery_nominal_voltage_v * battery_capacity_ah
-battery_internal_resistance_ohm = 0.35
+battery_internal_resistance_ohm = 1.00
 battery_ocv_soc_curve = (
     (2.80, 0.00),
     (3.00, 0.00),

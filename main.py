@@ -64,11 +64,18 @@ reverse_brake_left_speed = -30
 reverse_brake_right_speed = -40
 charge_station_stop_enabled = True
 charge_stop_ms = 300000
-charge_min_stop_ms = 90000
+charge_min_stop_ms = 0
 charge_max_stop_ms = 420000
-charge_skip_voltage_v = 3.58
-charge_nominal_voltage_v = 3.38
-charge_low_voltage_v = 3.18
+race_duration_ms = 20 * 60 * 1000
+estimated_solar_scan_ms = 5000
+charge_finish_margin_ms = 5000
+charge_request_deadband_ms = 15000
+battery_full_voltage_v = 3.70
+battery_cutoff_voltage_v = 3.00
+usable_battery_energy_wh = 0.29
+solar_charge_power_w = 0.30
+motor_power_intercept_w = 0.425
+motor_power_slope_w_per_cmd = 0.00875
 stop_marker_ignore_ms = 500
 solar_scan_start_angle = 45
 solar_scan_center_angle = 90
@@ -131,28 +138,58 @@ def station_policy_voltage(raw_voltage_v):
         return battery_voltage_filtered_v
     return min(battery_voltage_filtered_v, raw_voltage_v)
 
-def charge_duration_for_voltage(voltage_v):
-    if voltage_v is None:
-        return charge_stop_ms
+def motor_power_for_command(command):
+    return motor_power_intercept_w + motor_power_slope_w_per_cmd * command
 
-    if voltage_v >= charge_skip_voltage_v:
+def battery_energy_remaining_wh(voltage_v):
+    if voltage_v is None:
+        return None
+
+    voltage_v = clamp(voltage_v, battery_cutoff_voltage_v, battery_full_voltage_v)
+    usable_ratio = (
+        (voltage_v - battery_cutoff_voltage_v)
+        / (battery_full_voltage_v - battery_cutoff_voltage_v)
+    )
+    return usable_battery_energy_wh * usable_ratio
+
+def race_remaining_ms(current_time):
+    elapsed_ms = time.ticks_diff(current_time, race_start_time)
+    remaining_ms = race_duration_ms - elapsed_ms
+    return int(clamp(remaining_ms, 0, race_duration_ms))
+
+def charge_duration_for_voltage(voltage_v, current_time):
+    remaining_ms = race_remaining_ms(current_time)
+    max_charge_ms = remaining_ms - estimated_solar_scan_ms - charge_finish_margin_ms
+    if max_charge_ms <= 0:
         return 0
 
-    if voltage_v >= charge_nominal_voltage_v:
-        ratio = (
-            (charge_skip_voltage_v - voltage_v)
-            / (charge_skip_voltage_v - charge_nominal_voltage_v)
-        )
-        return int(charge_min_stop_ms + ratio * (charge_stop_ms - charge_min_stop_ms))
+    max_charge_ms = int(clamp(max_charge_ms, 0, charge_max_stop_ms))
+    if voltage_v is None:
+        return int(clamp(charge_stop_ms, 0, max_charge_ms))
 
-    if voltage_v <= charge_low_voltage_v:
-        return charge_max_stop_ms
+    energy_remaining_wh = battery_energy_remaining_wh(voltage_v)
+    if energy_remaining_wh is None:
+        return int(clamp(charge_stop_ms, 0, max_charge_ms))
 
-    ratio = (
-        (charge_nominal_voltage_v - voltage_v)
-        / (charge_nominal_voltage_v - charge_low_voltage_v)
+    available_after_scan_h = (
+        (remaining_ms - estimated_solar_scan_ms)
+        / 3600000
     )
-    return int(charge_stop_ms + ratio * (charge_max_stop_ms - charge_stop_ms))
+    motor_power_w = motor_power_for_command(base_speed)
+    needed_energy_wh = motor_power_w * available_after_scan_h - energy_remaining_wh
+    if needed_energy_wh <= 0:
+        return 0
+
+    charge_ms = int(
+        needed_energy_wh
+        / (motor_power_w + solar_charge_power_w)
+        * 3600000
+    )
+    if charge_ms <= charge_request_deadband_ms:
+        return 0
+
+    charge_ms = int(clamp(charge_ms, charge_min_stop_ms, max_charge_ms))
+    return charge_ms
 
 def drive_base_speed_for_voltage(voltage_v):
     if voltage_v is None or voltage_v >= voltage_speed_high_v:
@@ -241,6 +278,7 @@ time.sleep(2)
 connect_wifi()
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 last_send_time = time.ticks_ms()
+race_start_time = time.ticks_ms()
 motor_left_command = 0
 motor_right_command = 0
 
@@ -281,7 +319,7 @@ try:
             if raw_battery_voltage is not None:
                 update_battery_voltage(raw_battery_voltage)
             policy_voltage = station_policy_voltage(raw_battery_voltage)
-            charge_duration_ms = charge_duration_for_voltage(policy_voltage)
+            charge_duration_ms = charge_duration_for_voltage(policy_voltage, current_time)
 
             if charge_duration_ms <= 0:
                 stop_marker_ignore_until_time = time.ticks_add(current_time, stop_marker_ignore_ms)

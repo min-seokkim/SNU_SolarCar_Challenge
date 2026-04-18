@@ -51,17 +51,18 @@ ina_0x41 = INA226(address=0x41)
 kp = 1.5
 ki = 0.01
 kd = 0.2
-base_speed = 80
+base_speed = 100
 max_speed = 100
-min_speed = 45
+min_speed = 30
 slowdown_gain = 0.6
 integral_limit = 100
-fallback_timeout_ms = 700
+fallback_timeout_ms = 1000
 fallback_speed = 35
 fallback_turn = 55
 reverse_brake_ms = 200
 reverse_brake_left_speed = -30
 reverse_brake_right_speed = -40
+charge_station_stop_enabled = True
 charge_stop_ms = 10000
 stop_marker_ignore_ms = 500
 solar_scan_start_angle = 45
@@ -168,6 +169,8 @@ try:
         
         current_time = time.ticks_ms()
         stop_marker_detected = active_count == 8
+        if not charge_station_stop_enabled:
+            stop_marker_detected = False
         if stop_marker_ignore_until_time is not None:
             if time.ticks_diff(stop_marker_ignore_until_time, current_time) > 0:
                 stop_marker_detected = False

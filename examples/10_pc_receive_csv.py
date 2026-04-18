@@ -14,8 +14,8 @@ CSV_HEADER = [
     'SolarInput_I(mA)',
     'SolarInput_P(W)',
     'SolarInput_Energy_mWh',
-    'MotorBattery_V(V)',
-    'MotorBattery_I(mA)',
+    'Motor_V(V)',
+    'Motor_I(mA)',
     'MotorOutput_P(W)',
     'MotorOutput_Energy_mWh',
     'NetPowerUsage(W)',
@@ -106,9 +106,9 @@ try:
                 
                 # 화면 출력
                 if left_cmd is None or right_cmd is None:
-                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, MotorBattery={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_usage_mwh:.3f}mWh")
+                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, Motor={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_usage_mwh:.3f}mWh")
                 else:
-                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, MotorBattery={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_usage_mwh:.3f}mWh, L/R={left_cmd:.1f}/{right_cmd:.1f}")
+                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, Motor={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_usage_mwh:.3f}mWh, L/R={left_cmd:.1f}/{right_cmd:.1f}")
                 
                 # 저장을 완료했으므로 타이머를 현재 시간으로 리셋
                 last_save_time = current_time

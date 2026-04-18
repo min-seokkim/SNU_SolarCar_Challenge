@@ -61,13 +61,15 @@ fallback_speed = 35
 fallback_turn = 55
 reverse_brake_ms = 200
 reverse_brake_left_speed = -30
-reverse_brake_right_speed = -30
+reverse_brake_right_speed = -40
 charge_stop_ms = 10000
+stop_marker_ignore_ms = 500
 solar_scan_start_angle = 45
 solar_scan_end_angle = 134
 solar_scan_step = 1
 solar_scan_speed = 10
 solar_scan_settle_ms = 80
+solar_scan_drop_count_limit = 5
 pid_integral = 0
 pid_previous_error = 0
 pid_has_previous_error = False
@@ -76,6 +78,7 @@ last_seen_steering = 0
 lost_line_start_time = None
 stop_marker_armed = True
 charging_until_time = None
+stop_marker_ignore_until_time = None
 
 def clamp(value, min_value, max_value):
     if value < min_value:
@@ -87,6 +90,7 @@ def clamp(value, min_value, max_value):
 def scan_best_solar_angle():
     best_angle = None
     best_power = None
+    drop_count = 0
 
     print("Solar scan start...")
     for angle in range(solar_scan_start_angle, solar_scan_end_angle + 1, solar_scan_step):
@@ -104,6 +108,12 @@ def scan_best_solar_angle():
         if best_power is None or power_w > best_power:
             best_power = power_w
             best_angle = angle
+            drop_count = 0
+        else:
+            drop_count += 1
+            if drop_count >= solar_scan_drop_count_limit:
+                print("Solar peak passed. Stopping scan early.")
+                break
 
     if best_angle is not None:
         solar_servo.myServoWriteAngle(best_angle, 15)
@@ -150,6 +160,11 @@ try:
         
         current_time = time.ticks_ms()
         stop_marker_detected = active_count == 8
+        if stop_marker_ignore_until_time is not None:
+            if time.ticks_diff(stop_marker_ignore_until_time, current_time) > 0:
+                stop_marker_detected = False
+            else:
+                stop_marker_ignore_until_time = None
         skip_drive_control = False
 
         if not stop_marker_detected:
@@ -188,6 +203,7 @@ try:
                 skip_drive_control = True
             else:
                 charging_until_time = None
+                stop_marker_ignore_until_time = time.ticks_add(current_time, stop_marker_ignore_ms)
                 print("Charging done. Resuming...")
                 
         if not skip_drive_control and active_count > 0:

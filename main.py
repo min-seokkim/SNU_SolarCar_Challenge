@@ -45,8 +45,8 @@ ina_0x40 = INA226(address=0x40)
 ina_0x41 = INA226(address=0x41)
 
 # 주행 설정
-kp = 0.8
-ki = 0.0
+kp = 1.5
+ki = 0.01
 kd = 0.2
 base_speed = 80
 max_speed = 100

@@ -10,14 +10,16 @@ UDP_PORT = 5005
 FILE_NAME = "sensor_data.csv"
 CSV_HEADER = [
     'Timestamp',
-    'V1(V)',
-    'I1(mA)',
-    'SolarInput_P1(W)',
-    'SolarInput_Energy_Wh',
-    'V2(V)',
-    'I2(mA)',
-    'MotorOutput_P2(W)',
-    'MotorOutput_Energy_Wh',
+    'SolarInput_V(V)',
+    'SolarInput_I(mA)',
+    'SolarInput_P(W)',
+    'SolarInput_Energy_mWh',
+    'MotorBattery_V(V)',
+    'MotorBattery_I(mA)',
+    'MotorOutput_P(W)',
+    'MotorOutput_Energy_mWh',
+    'NetPowerUsage(W)',
+    'NetEnergyUsage_mWh',
     'LeftCmd',
     'RightCmd',
 ]
@@ -74,6 +76,11 @@ try:
                     solar_input_energy_wh += solar_input_w * dt_hours
                     motor_output_energy_wh += motor_output_w * dt_hours
                 last_energy_time = current_time
+                net_power_usage_w = motor_output_w - solar_input_w
+                net_energy_usage_wh = motor_output_energy_wh - solar_input_energy_wh
+                solar_input_energy_mwh = solar_input_energy_wh * 1000
+                motor_output_energy_mwh = motor_output_energy_wh * 1000
+                net_energy_usage_mwh = net_energy_usage_wh * 1000
                 
                 # 현재 시간
                 now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -86,20 +93,22 @@ try:
                         f"{v1:.3f}",
                         f"{c1:.1f}",
                         f"{solar_input_w:.4f}",
-                        f"{solar_input_energy_wh:.6f}",
+                        f"{solar_input_energy_mwh:.3f}",
                         f"{v2:.3f}",
                         f"{c2:.1f}",
                         f"{motor_output_w:.4f}",
-                        f"{motor_output_energy_wh:.6f}",
+                        f"{motor_output_energy_mwh:.3f}",
+                        f"{net_power_usage_w:.4f}",
+                        f"{net_energy_usage_mwh:.3f}",
                         "" if left_cmd is None else f"{left_cmd:.1f}",
                         "" if right_cmd is None else f"{right_cmd:.1f}",
                     ])
                 
                 # 화면 출력
                 if left_cmd is None or right_cmd is None:
-                    print(f"[{now_str}] Saved: Solar={solar_input_w:.3f}W/{solar_input_energy_wh:.5f}Wh, Motor={motor_output_w:.3f}W/{motor_output_energy_wh:.5f}Wh")
+                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, MotorBattery={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_usage_mwh:.3f}mWh")
                 else:
-                    print(f"[{now_str}] Saved: Solar={solar_input_w:.3f}W/{solar_input_energy_wh:.5f}Wh, Motor={motor_output_w:.3f}W/{motor_output_energy_wh:.5f}Wh, L/R={left_cmd:.1f}/{right_cmd:.1f}")
+                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, MotorBattery={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_usage_mwh:.3f}mWh, L/R={left_cmd:.1f}/{right_cmd:.1f}")
                 
                 # 저장을 완료했으므로 타이머를 현재 시간으로 리셋
                 last_save_time = current_time

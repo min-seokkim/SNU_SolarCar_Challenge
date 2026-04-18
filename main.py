@@ -59,6 +59,9 @@ integral_limit = 100
 fallback_timeout_ms = 700
 fallback_speed = 35
 fallback_turn = 55
+reverse_brake_ms = 200
+reverse_brake_left_speed = -30
+reverse_brake_right_speed = -30
 charge_stop_ms = 10000
 solar_scan_start_angle = 45
 solar_scan_end_angle = 134
@@ -158,6 +161,10 @@ try:
             pid_previous_error = 0
             pid_has_previous_error = False
             lost_line_start_time = None
+            motor_left_command = reverse_brake_left_speed
+            motor_right_command = reverse_brake_right_speed
+            motor.set_speed(motor_left_command, motor_right_command)
+            time.sleep_ms(reverse_brake_ms)
             motor_left_command = 0
             motor_right_command = 0
             motor.set_speed(motor_left_command, motor_right_command)

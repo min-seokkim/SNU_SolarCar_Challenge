@@ -11,8 +11,9 @@ PASSWORD = "12345678"
 PC_IP = "192.168.137.1"
 PC_PORT = 5005
 
+wlan = network.WLAN(network.STA_IF)
+
 def connect_wifi():
-    wlan = network.WLAN(network.STA_IF)
     wlan.active(False)
     time.sleep(0.5)
     wlan.active(True)
@@ -80,7 +81,9 @@ except Exception as e:
     print("INA226 설정 실패:", e)
 
 # Wi-Fi 연결 및 소켓(UDP) 생성
-wifi_status = connect_wifi()
+print("하드웨어 전원 안정화 대기 중...")
+time.sleep(2)
+connect_wifi()
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 last_send_time = time.ticks_ms()
 motor_left_command = 0
@@ -170,7 +173,7 @@ try:
                 v2, ma2 = ina_0x41.read_bus_voltage(), ina_0x41.read_shunt_current()
                 
                 if None not in (v1, ma1, v2, ma2):
-                    if wifi_status:
+                    if wlan.isconnected():
                         message = f"{v1:.3f},{ma1*1000:.1f},{v2:.3f},{ma2*1000:.1f},{motor_left_command:.1f},{motor_right_command:.1f}"
                         sock.sendto(message.encode(), (PC_IP, PC_PORT))
                         print(f"전송 -> 0x40: {v1:.2f}V/{ma1*1000:.0f}mA | 0x41: {v2:.2f}V/{ma2*1000:.0f}mA")

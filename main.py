@@ -51,9 +51,9 @@ ina_0x41 = INA226(address=0x41)
 kp = 1.5
 ki = 0.01
 kd = 0.2
-base_speed = 100
+base_speed = 60
 max_speed = 100
-min_speed = 50
+min_speed = 25
 slowdown_gain = 0.6
 integral_limit = 100
 fallback_timeout_ms = 1000
@@ -69,10 +69,11 @@ solar_scan_start_angle = 45
 solar_scan_center_angle = 90
 solar_scan_end_angle = 135
 solar_scan_step = 1
-solar_scan_speed = 10
-solar_scan_settle_ms = 80
-solar_scan_power_baseline_w = 0.15
-solar_scan_drop_count_limit = 5
+solar_scan_low_power_step = 6
+solar_scan_speed = 40
+solar_scan_settle_ms = 40
+solar_scan_power_baseline_w = 0.18
+solar_scan_drop_count_limit = 4
 pid_integral = 0
 pid_previous_error = 0
 pid_has_previous_error = False
@@ -96,14 +97,19 @@ def scan_best_solar_angle():
     drop_count = 0
 
     if solar_servo.current_angle < solar_scan_center_angle:
-        scan_angles = range(solar_scan_start_angle, solar_scan_end_angle + 1, solar_scan_step)
+        angle = solar_scan_start_angle
+        scan_end_angle = solar_scan_end_angle
+        scan_direction_step = 1
         scan_direction = "45->135"
     else:
-        scan_angles = range(solar_scan_end_angle, solar_scan_start_angle - 1, -solar_scan_step)
+        angle = solar_scan_end_angle
+        scan_end_angle = solar_scan_start_angle
+        scan_direction_step = -1
         scan_direction = "135->45"
 
     print(f"Solar scan start... direction={scan_direction}")
-    for angle in scan_angles:
+    while (scan_direction_step > 0 and angle <= scan_end_angle) or \
+          (scan_direction_step < 0 and angle >= scan_end_angle):
         solar_servo.myServoWriteAngle(angle, solar_scan_speed)
         time.sleep_ms(solar_scan_settle_ms)
 
@@ -116,6 +122,7 @@ def scan_best_solar_angle():
             continue
 
         if power_w <= solar_scan_power_baseline_w:
+            angle += solar_scan_low_power_step * scan_direction_step
             continue
 
         if best_power is None or power_w > best_power:
@@ -127,6 +134,8 @@ def scan_best_solar_angle():
             if drop_count >= solar_scan_drop_count_limit:
                 print("Solar peak passed. Stopping scan early.")
                 break
+
+        angle += solar_scan_step * scan_direction_step
 
     if best_angle is not None:
         solar_servo.myServoWriteAngle(best_angle, 15)
@@ -164,7 +173,7 @@ try:
         error_sum = 0
         active_count = 0
         steering = 0
-        channels = [1-c for c in channels]
+        # channels = [1-c for c in channels]
         
         for i in range(8):
             if channels[i] == 1:

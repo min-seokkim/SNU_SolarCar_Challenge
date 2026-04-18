@@ -65,7 +65,8 @@ reverse_brake_right_speed = -40
 charge_stop_ms = 10000
 stop_marker_ignore_ms = 500
 solar_scan_start_angle = 45
-solar_scan_end_angle = 134
+solar_scan_center_angle = 90
+solar_scan_end_angle = 135
 solar_scan_step = 1
 solar_scan_speed = 10
 solar_scan_settle_ms = 80
@@ -92,8 +93,15 @@ def scan_best_solar_angle():
     best_power = None
     drop_count = 0
 
-    print("Solar scan start...")
-    for angle in range(solar_scan_start_angle, solar_scan_end_angle + 1, solar_scan_step):
+    if solar_servo.current_angle < solar_scan_center_angle:
+        scan_angles = range(solar_scan_start_angle, solar_scan_end_angle + 1, solar_scan_step)
+        scan_direction = "45->135"
+    else:
+        scan_angles = range(solar_scan_end_angle, solar_scan_start_angle - 1, -solar_scan_step)
+        scan_direction = "135->45"
+
+    print(f"Solar scan start... direction={scan_direction}")
+    for angle in scan_angles:
         solar_servo.myServoWriteAngle(angle, solar_scan_speed)
         time.sleep_ms(solar_scan_settle_ms)
 

@@ -50,6 +50,8 @@ ki = 0.01
 kd = 0.2
 base_speed = 80
 max_speed = 100
+min_speed = 45
+slowdown_gain = 0.6
 integral_limit = 100
 pid_integral = 0
 pid_previous_error = 0
@@ -116,8 +118,11 @@ try:
             pid_previous_error = error
             pid_has_previous_error = True
 
-            left_speed = clamp(base_speed + steering, -max_speed, max_speed)
-            right_speed = clamp(base_speed - steering, -max_speed, max_speed)
+            slowdown = min(abs(error) * slowdown_gain, base_speed - min_speed)
+            drive_speed = base_speed - slowdown
+
+            left_speed = clamp(drive_speed + steering, -max_speed, max_speed)
+            right_speed = clamp(drive_speed - steering, -max_speed, max_speed)
             motor.set_speed(left_speed, right_speed)
         else:
             pid_integral = 0

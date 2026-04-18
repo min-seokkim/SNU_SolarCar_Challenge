@@ -51,10 +51,10 @@ ina_0x41 = INA226(address=0x41)
 kp = 1.5
 ki = 0.01
 kd = 0.2
-base_speed = 60
+base_speed = 95
 max_speed = 100
-min_speed = 25
-slowdown_gain = 0.6
+min_speed = 50
+slowdown_gain = 0.75
 integral_limit = 100
 fallback_timeout_ms = 1000
 fallback_speed = 35
@@ -63,7 +63,12 @@ reverse_brake_ms = 200
 reverse_brake_left_speed = -30
 reverse_brake_right_speed = -40
 charge_station_stop_enabled = True
-charge_stop_ms = 10000
+charge_stop_ms = 300000
+charge_min_stop_ms = 90000
+charge_max_stop_ms = 420000
+charge_skip_voltage_v = 3.58
+charge_nominal_voltage_v = 3.38
+charge_low_voltage_v = 3.18
 stop_marker_ignore_ms = 500
 solar_scan_start_angle = 45
 solar_scan_center_angle = 90
@@ -72,8 +77,12 @@ solar_scan_step = 1
 solar_scan_low_power_step = 6
 solar_scan_speed = 40
 solar_scan_settle_ms = 40
-solar_scan_power_baseline_w = 0.18
+solar_scan_power_baseline_w = 0.15
 solar_scan_drop_count_limit = 4
+battery_voltage_filter_alpha = 0.25
+voltage_speed_high_v = 3.40
+voltage_speed_low_v = 3.10
+low_voltage_base_speed = 82
 pid_integral = 0
 pid_previous_error = 0
 pid_has_previous_error = False
@@ -83,6 +92,7 @@ lost_line_start_time = None
 stop_marker_armed = True
 charging_until_time = None
 stop_marker_ignore_until_time = None
+battery_voltage_filtered_v = None
 
 def clamp(value, min_value, max_value):
     if value < min_value:
@@ -90,6 +100,77 @@ def clamp(value, min_value, max_value):
     if value > max_value:
         return max_value
     return value
+
+def update_battery_voltage(voltage_v):
+    global battery_voltage_filtered_v
+
+    if voltage_v is None:
+        return battery_voltage_filtered_v
+
+    if battery_voltage_filtered_v is None:
+        battery_voltage_filtered_v = voltage_v
+    else:
+        battery_voltage_filtered_v = (
+            battery_voltage_filter_alpha * voltage_v
+            + (1 - battery_voltage_filter_alpha) * battery_voltage_filtered_v
+        )
+
+    return battery_voltage_filtered_v
+
+def read_battery_voltage():
+    try:
+        return ina_0x41.read_bus_voltage()
+    except Exception as e:
+        print("Battery voltage read error:", e)
+        return None
+
+def station_policy_voltage(raw_voltage_v):
+    if battery_voltage_filtered_v is None:
+        return raw_voltage_v
+    if raw_voltage_v is None:
+        return battery_voltage_filtered_v
+    return min(battery_voltage_filtered_v, raw_voltage_v)
+
+def charge_duration_for_voltage(voltage_v):
+    if voltage_v is None:
+        return charge_stop_ms
+
+    if voltage_v >= charge_skip_voltage_v:
+        return 0
+
+    if voltage_v >= charge_nominal_voltage_v:
+        ratio = (
+            (charge_skip_voltage_v - voltage_v)
+            / (charge_skip_voltage_v - charge_nominal_voltage_v)
+        )
+        return int(charge_min_stop_ms + ratio * (charge_stop_ms - charge_min_stop_ms))
+
+    if voltage_v <= charge_low_voltage_v:
+        return charge_max_stop_ms
+
+    ratio = (
+        (charge_nominal_voltage_v - voltage_v)
+        / (charge_nominal_voltage_v - charge_low_voltage_v)
+    )
+    return int(charge_stop_ms + ratio * (charge_max_stop_ms - charge_stop_ms))
+
+def drive_base_speed_for_voltage(voltage_v):
+    if voltage_v is None or voltage_v >= voltage_speed_high_v:
+        return base_speed
+
+    if voltage_v <= voltage_speed_low_v:
+        return low_voltage_base_speed
+
+    ratio = (
+        (voltage_v - voltage_speed_low_v)
+        / (voltage_speed_high_v - voltage_speed_low_v)
+    )
+    return low_voltage_base_speed + ratio * (base_speed - low_voltage_base_speed)
+
+def format_voltage(voltage_v):
+    if voltage_v is None:
+        return "unknown"
+    return f"{voltage_v:.2f}V"
 
 def scan_best_solar_angle():
     best_angle = None
@@ -196,23 +277,33 @@ try:
 
         if stop_marker_detected and stop_marker_armed and charging_until_time is None:
             stop_marker_armed = False
-            pid_integral = 0
-            pid_previous_error = 0
-            pid_has_previous_error = False
-            lost_line_start_time = None
-            motor_left_command = reverse_brake_left_speed
-            motor_right_command = reverse_brake_right_speed
-            motor.set_speed(motor_left_command, motor_right_command)
-            time.sleep_ms(reverse_brake_ms)
-            motor_left_command = 0
-            motor_right_command = 0
-            motor.set_speed(motor_left_command, motor_right_command)
-            print("Stop marker detected. Optimizing solar angle...")
-            scan_best_solar_angle()
-            current_time = time.ticks_ms()
-            last_pid_time = current_time
-            charging_until_time = time.ticks_add(current_time, charge_stop_ms)
-            print("Charging...")
+            raw_battery_voltage = read_battery_voltage()
+            if raw_battery_voltage is not None:
+                update_battery_voltage(raw_battery_voltage)
+            policy_voltage = station_policy_voltage(raw_battery_voltage)
+            charge_duration_ms = charge_duration_for_voltage(policy_voltage)
+
+            if charge_duration_ms <= 0:
+                stop_marker_ignore_until_time = time.ticks_add(current_time, stop_marker_ignore_ms)
+                print(f"Stop marker skipped. Battery={format_voltage(policy_voltage)}")
+            else:
+                pid_integral = 0
+                pid_previous_error = 0
+                pid_has_previous_error = False
+                lost_line_start_time = None
+                motor_left_command = reverse_brake_left_speed
+                motor_right_command = reverse_brake_right_speed
+                motor.set_speed(motor_left_command, motor_right_command)
+                time.sleep_ms(reverse_brake_ms)
+                motor_left_command = 0
+                motor_right_command = 0
+                motor.set_speed(motor_left_command, motor_right_command)
+                print(f"Stop marker detected. Battery={format_voltage(policy_voltage)}. Optimizing solar angle...")
+                scan_best_solar_angle()
+                current_time = time.ticks_ms()
+                last_pid_time = current_time
+                charging_until_time = time.ticks_add(current_time, charge_duration_ms)
+                print(f"Charging for {charge_duration_ms // 1000}s...")
 
         if charging_until_time is not None:
             if time.ticks_diff(charging_until_time, current_time) > 0:
@@ -254,8 +345,10 @@ try:
             last_seen_steering = steering
             lost_line_start_time = None
 
-            slowdown = min(abs(error) * slowdown_gain, base_speed - min_speed)
-            drive_speed = base_speed - slowdown
+            target_base_speed = drive_base_speed_for_voltage(battery_voltage_filtered_v)
+            target_base_speed = clamp(target_base_speed, min_speed, max_speed)
+            slowdown = min(abs(error) * slowdown_gain, target_base_speed - min_speed)
+            drive_speed = target_base_speed - slowdown
 
             left_speed = clamp(drive_speed + steering, -max_speed, max_speed)
             right_speed = clamp(drive_speed - steering, -max_speed, max_speed)
@@ -297,6 +390,7 @@ try:
                 v2, ma2 = ina_0x41.read_bus_voltage(), ina_0x41.read_shunt_current()
                 
                 if None not in (v1, ma1, v2, ma2):
+                    update_battery_voltage(v2)
                     if wlan.isconnected():
                         message = f"{v1:.3f},{ma1*1000:.1f},{v2:.3f},{ma2*1000:.1f},{motor_left_command:.1f},{motor_right_command:.1f}"
                         sock.sendto(message.encode(), (PC_IP, PC_PORT))

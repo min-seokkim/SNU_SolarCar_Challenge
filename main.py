@@ -45,8 +45,23 @@ ina_0x40 = INA226(address=0x40)
 ina_0x41 = INA226(address=0x41)
 
 # 주행 설정
-kp = 1.5
-base_speed = 100
+kp = 0.8
+ki = 0.0
+kd = 0.2
+base_speed = 50
+max_speed = 80
+integral_limit = 100
+pid_integral = 0
+pid_previous_error = 0
+pid_has_previous_error = False
+last_pid_time = time.ticks_ms()
+
+def clamp(value, min_value, max_value):
+    if value < min_value:
+        return min_value
+    if value > max_value:
+        return max_value
+    return value
 
 try:
     ina_0x40.configure(avg=4, busConvTime=4, shuntConvTime=4, mode=7)
@@ -79,9 +94,35 @@ try:
                 active_count += 1
                 
         if active_count > 0:
-            steering = error_sum * kp
-            motor.set_speed((base_speed + steering), base_speed - steering)
+            current_time = time.ticks_ms()
+            dt_ms = time.ticks_diff(current_time, last_pid_time)
+            if dt_ms <= 0:
+                dt = 0.001
+            else:
+                dt = dt_ms / 1000
+            last_pid_time = current_time
+
+            error = error_sum / active_count
+            pid_integral += error * dt
+            pid_integral = clamp(pid_integral, -integral_limit, integral_limit)
+
+            if pid_has_previous_error:
+                derivative = (error - pid_previous_error) / dt
+            else:
+                derivative = 0
+
+            steering = (kp * error) + (ki * pid_integral) + (kd * derivative)
+            pid_previous_error = error
+            pid_has_previous_error = True
+
+            left_speed = clamp(base_speed + steering, -max_speed, max_speed)
+            right_speed = clamp(base_speed - steering, -max_speed, max_speed)
+            motor.set_speed(left_speed, right_speed)
         else:
+            pid_integral = 0
+            pid_previous_error = 0
+            pid_has_previous_error = False
+            last_pid_time = time.ticks_ms()
             motor.set_speed(0, 0) 
 
         # --- B. INA226 데이터 읽기 및 Wi-Fi 송신 (0.5초마다) ---

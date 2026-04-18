@@ -68,7 +68,7 @@ try:
     while True:
         # --- A. 라인 트레이싱 로직 ---
         channels = sensor.read_channels()
-        weights = [-40, -30, -20, -10, 10, 20, 30, 40]
+        weights = [-55, -30, -20, -10, 10, 20, 30, 55]
         error_sum = 0
         active_count = 0
         steering = 0

@@ -22,6 +22,7 @@ CSV_HEADER = [
     'NetEnergy_mWh',
     'LeftCmd',
     'RightCmd',
+    'ChargeRemaining_s',
 ]
 
 # --- 2. CSV 파일 초기화 (머리글 작성) ---
@@ -55,11 +56,14 @@ try:
             try:
                 # 수신 데이터 파싱
                 parts = message.split(',')
-                if len(parts) == 6:
+                if len(parts) == 7:
+                    v1_s, c1_s, v2_s, c2_s, left_cmd_s, right_cmd_s, charge_remaining_s = parts
+                elif len(parts) == 6:
                     v1_s, c1_s, v2_s, c2_s, left_cmd_s, right_cmd_s = parts
+                    charge_remaining_s = ""
                 elif len(parts) == 4:
                     v1_s, c1_s, v2_s, c2_s = parts
-                    left_cmd_s, right_cmd_s = "", ""
+                    left_cmd_s, right_cmd_s, charge_remaining_s = "", "", ""
                 else:
                     raise ValueError
                 
@@ -68,6 +72,7 @@ try:
                 v2, c2 = float(v2_s), float(c2_s)
                 left_cmd = float(left_cmd_s) if left_cmd_s else None
                 right_cmd = float(right_cmd_s) if right_cmd_s else None
+                charge_remaining = float(charge_remaining_s) if charge_remaining_s else None
                 solar_input_w = v1 * (c1 / 1000)
                 motor_output_w = v2 * (c2 / 1000)
 
@@ -102,13 +107,15 @@ try:
                         f"{net_energy_mwh:.3f}",
                         "" if left_cmd is None else f"{left_cmd:.1f}",
                         "" if right_cmd is None else f"{right_cmd:.1f}",
+                        "" if charge_remaining is None else f"{charge_remaining:.1f}",
                     ])
                 
                 # 화면 출력
                 if left_cmd is None or right_cmd is None:
                     print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, Motor={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_mwh:.3f}mWh")
                 else:
-                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, Motor={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_mwh:.3f}mWh, L/R={left_cmd:.1f}/{right_cmd:.1f}")
+                    charge_text = "N/A" if charge_remaining is None else f"{charge_remaining:.1f}s"
+                    print(f"[{now_str}] Saved: Solar={v1:.2f}V/{c1:.1f}mA/{solar_input_w:.3f}W, Motor={v2:.2f}V/{c2:.1f}mA/{motor_output_w:.3f}W, Net={net_energy_mwh:.3f}mWh, L/R={left_cmd:.1f}/{right_cmd:.1f}, ChargeLeft={charge_text}")
                 
                 # 저장을 완료했으므로 타이머를 현재 시간으로 리셋
                 last_save_time = current_time

@@ -13,8 +13,14 @@ PC_IP = "192.168.137.1"
 PC_PORT = 5005
 
 wlan = network.WLAN(network.STA_IF)
+wifi_retry_ms = 5000
+wifi_last_attempt_time = None
+wifi_connected_logged = False
+wifi_configured = False
 
 def connect_wifi():
+    return start_wifi_connect()
+
     wlan.active(False)
     time.sleep(0.5)
     wlan.active(True)
@@ -38,6 +44,53 @@ def connect_wifi():
         print('\nWi-Fi 연결 성공! IP:', wlan.ifconfig()[0])
         return True
     return False
+
+def start_wifi_connect():
+    global wifi_last_attempt_time, wifi_connected_logged, wifi_configured
+
+    try:
+        wlan.active(True)
+    except Exception as e:
+        print("Wi-Fi active error:", e)
+        return False
+
+    if not wifi_configured:
+        try:
+            wlan.config(txpower=10)
+            print("TX Power set to 10")
+        except Exception as e:
+            print("TX Power config skipped:", e)
+        wifi_configured = True
+
+    if wlan.isconnected():
+        if not wifi_connected_logged:
+            print("Wi-Fi connected! IP:", wlan.ifconfig()[0])
+            wifi_connected_logged = True
+        return True
+
+    current_time = time.ticks_ms()
+    if wifi_last_attempt_time is None or time.ticks_diff(current_time, wifi_last_attempt_time) >= wifi_retry_ms:
+        wifi_last_attempt_time = current_time
+        wifi_connected_logged = False
+        print(f"{SSID} Wi-Fi connect attempt...")
+        try:
+            wlan.connect(SSID, PASSWORD)
+        except Exception as e:
+            print("Wi-Fi connect attempt failed:", e)
+
+    return False
+
+def service_wifi():
+    global wifi_connected_logged
+
+    if wlan.isconnected():
+        if not wifi_connected_logged:
+            print("Wi-Fi connected! IP:", wlan.ifconfig()[0])
+            wifi_connected_logged = True
+        return True
+
+    wifi_connected_logged = False
+    return start_wifi_connect()
 
 # --- 2. 하드웨어 초기화 
 sensor = LineSensor()
@@ -63,16 +116,35 @@ reverse_brake_ms = 200
 reverse_brake_left_speed = -30
 reverse_brake_right_speed = -40
 charge_station_stop_enabled = True
-charge_stop_ms = 300000
+charge_stop_ms = 60000
 charge_min_stop_ms = 0
-charge_max_stop_ms = 420000
+charge_max_stop_ms = 120000
 race_duration_ms = 20 * 60 * 1000
 estimated_solar_scan_ms = 5000
 charge_finish_margin_ms = 5000
-charge_request_deadband_ms = 15000
-battery_full_voltage_v = 3.70
-battery_cutoff_voltage_v = 3.00
-usable_battery_energy_wh = 0.29
+charge_request_deadband_ms = 60000
+battery_full_voltage_v = 4.20
+battery_cutoff_voltage_v = 2.80
+battery_nominal_voltage_v = 3.70
+battery_capacity_ah = 0.110
+usable_battery_energy_wh = battery_nominal_voltage_v * battery_capacity_ah
+battery_internal_resistance_ohm = 0.35
+battery_ocv_soc_curve = (
+    (2.80, 0.00),
+    (3.00, 0.00),
+    (3.30, 0.02),
+    (3.45, 0.05),
+    (3.58, 0.10),
+    (3.63, 0.20),
+    (3.70, 0.30),
+    (3.75, 0.40),
+    (3.79, 0.50),
+    (3.83, 0.60),
+    (3.91, 0.70),
+    (4.00, 0.80),
+    (4.10, 0.90),
+    (4.20, 1.00),
+)
 solar_charge_power_w = 0.30
 motor_power_intercept_w = 0.425
 motor_power_slope_w_per_cmd = 0.00875
@@ -87,9 +159,8 @@ solar_scan_settle_ms = 40
 solar_scan_power_baseline_w = 0.15
 solar_scan_drop_count_limit = 4
 battery_voltage_filter_alpha = 0.25
-voltage_speed_high_v = 3.40
-voltage_speed_low_v = 3.10
-low_voltage_base_speed = 82
+voltage_compensation_ref_v = 3.70
+voltage_compensation_min_v = 2.80
 pid_integral = 0
 pid_previous_error = 0
 pid_has_previous_error = False
@@ -100,6 +171,7 @@ stop_marker_armed = True
 charging_until_time = None
 stop_marker_ignore_until_time = None
 battery_voltage_filtered_v = None
+last_motor_current_a = 0
 
 def clamp(value, min_value, max_value):
     if value < min_value:
@@ -108,9 +180,24 @@ def clamp(value, min_value, max_value):
         return max_value
     return value
 
-def update_battery_voltage(voltage_v):
+def estimate_battery_ocv(terminal_voltage_v, motor_current_a):
+    if terminal_voltage_v is None:
+        return None
+
+    if motor_current_a is None:
+        motor_current_a = 0
+
+    discharge_current_a = abs(motor_current_a)
+    ocv_v = terminal_voltage_v + discharge_current_a * battery_internal_resistance_ohm
+    return clamp(ocv_v, battery_cutoff_voltage_v, battery_full_voltage_v)
+
+def update_battery_voltage(voltage_v, motor_current_a=0):
     global battery_voltage_filtered_v
 
+    if voltage_v is None:
+        return battery_voltage_filtered_v
+
+    voltage_v = estimate_battery_ocv(voltage_v, motor_current_a)
     if voltage_v is None:
         return battery_voltage_filtered_v
 
@@ -124,33 +211,57 @@ def update_battery_voltage(voltage_v):
 
     return battery_voltage_filtered_v
 
-def read_battery_voltage():
+def read_battery_measurement():
     try:
-        return ina_0x41.read_bus_voltage()
+        return ina_0x41.read_bus_voltage(), ina_0x41.read_shunt_current()
     except Exception as e:
-        print("Battery voltage read error:", e)
-        return None
+        print("Battery read error:", e)
+        return None, None
 
-def station_policy_voltage(raw_voltage_v):
+def station_policy_voltage(raw_voltage_v, motor_current_a):
+    raw_ocv_v = estimate_battery_ocv(raw_voltage_v, motor_current_a)
     if battery_voltage_filtered_v is None:
-        return raw_voltage_v
-    if raw_voltage_v is None:
+        return raw_ocv_v
+    if raw_ocv_v is None:
         return battery_voltage_filtered_v
-    return min(battery_voltage_filtered_v, raw_voltage_v)
+    return min(battery_voltage_filtered_v, raw_ocv_v)
 
 def motor_power_for_command(command):
     return motor_power_intercept_w + motor_power_slope_w_per_cmd * command
+
+def battery_soc_from_ocv(ocv_v):
+    if ocv_v is None:
+        return None
+
+    ocv_v = clamp(ocv_v, battery_cutoff_voltage_v, battery_full_voltage_v)
+    previous_voltage, previous_soc = battery_ocv_soc_curve[0]
+
+    if ocv_v <= previous_voltage:
+        return previous_soc
+
+    for i in range(1, len(battery_ocv_soc_curve)):
+        next_voltage, next_soc = battery_ocv_soc_curve[i]
+        if ocv_v <= next_voltage:
+            voltage_span = next_voltage - previous_voltage
+            if voltage_span <= 0:
+                return next_soc
+            ratio = (ocv_v - previous_voltage) / voltage_span
+            return previous_soc + ratio * (next_soc - previous_soc)
+
+        previous_voltage = next_voltage
+        previous_soc = next_soc
+
+    return battery_ocv_soc_curve[-1][1]
 
 def battery_energy_remaining_wh(voltage_v):
     if voltage_v is None:
         return None
 
-    voltage_v = clamp(voltage_v, battery_cutoff_voltage_v, battery_full_voltage_v)
-    usable_ratio = (
-        (voltage_v - battery_cutoff_voltage_v)
-        / (battery_full_voltage_v - battery_cutoff_voltage_v)
-    )
-    return usable_battery_energy_wh * usable_ratio
+    soc = battery_soc_from_ocv(voltage_v)
+    if soc is None:
+        return None
+
+    return usable_battery_energy_wh * soc
 
 def race_remaining_ms(current_time):
     elapsed_ms = time.ticks_diff(current_time, race_start_time)
@@ -192,17 +303,25 @@ def charge_duration_for_voltage(voltage_v, current_time):
     return charge_ms
 
 def drive_base_speed_for_voltage(voltage_v):
-    if voltage_v is None or voltage_v >= voltage_speed_high_v:
+    if voltage_v is None:
         return base_speed
 
-    if voltage_v <= voltage_speed_low_v:
-        return low_voltage_base_speed
+    voltage_v = max(voltage_v, voltage_compensation_min_v)
+    if voltage_v >= voltage_compensation_ref_v:
+        return base_speed
 
-    ratio = (
-        (voltage_v - voltage_speed_low_v)
-        / (voltage_speed_high_v - voltage_speed_low_v)
-    )
-    return low_voltage_base_speed + ratio * (base_speed - low_voltage_base_speed)
+    compensated_speed = base_speed * voltage_compensation_ref_v / voltage_v
+    return clamp(compensated_speed, base_speed, max_speed)
+
+def charge_remaining_seconds(current_time):
+    if charging_until_time is None:
+        return 0
+
+    remaining_ms = time.ticks_diff(charging_until_time, current_time)
+    if remaining_ms <= 0:
+        return 0
+
+    return remaining_ms / 1000
 
 def format_voltage(voltage_v):
     if voltage_v is None:
@@ -275,7 +394,7 @@ except Exception as e:
 # Wi-Fi 연결 및 소켓(UDP) 생성
 print("하드웨어 전원 안정화 대기 중...")
 time.sleep(2)
-connect_wifi()
+start_wifi_connect()
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 last_send_time = time.ticks_ms()
 race_start_time = time.ticks_ms()
@@ -315,10 +434,12 @@ try:
 
         if stop_marker_detected and stop_marker_armed and charging_until_time is None:
             stop_marker_armed = False
-            raw_battery_voltage = read_battery_voltage()
+            raw_battery_voltage, raw_motor_current = read_battery_measurement()
+            if raw_motor_current is None:
+                raw_motor_current = last_motor_current_a
             if raw_battery_voltage is not None:
-                update_battery_voltage(raw_battery_voltage)
-            policy_voltage = station_policy_voltage(raw_battery_voltage)
+                update_battery_voltage(raw_battery_voltage, raw_motor_current)
+            policy_voltage = station_policy_voltage(raw_battery_voltage, raw_motor_current)
             charge_duration_ms = charge_duration_for_voltage(policy_voltage, current_time)
 
             if charge_duration_ms <= 0:
@@ -423,16 +544,19 @@ try:
         # --- B. INA226 데이터 읽기 및 Wi-Fi 송신 (0.5초마다) ---
         current_time = time.ticks_ms()
         if time.ticks_diff(current_time, last_send_time) > 500:
+            wifi_ready = service_wifi()
             try:
                 v1, ma1 = ina_0x40.read_bus_voltage(), ina_0x40.read_shunt_current()
                 v2, ma2 = ina_0x41.read_bus_voltage(), ina_0x41.read_shunt_current()
                 
                 if None not in (v1, ma1, v2, ma2):
-                    update_battery_voltage(v2)
-                    if wlan.isconnected():
-                        message = f"{v1:.3f},{ma1*1000:.1f},{v2:.3f},{ma2*1000:.1f},{motor_left_command:.1f},{motor_right_command:.1f}"
+                    last_motor_current_a = ma2
+                    update_battery_voltage(v2, ma2)
+                    charge_remaining_s = charge_remaining_seconds(current_time)
+                    if wifi_ready:
+                        message = f"{v1:.3f},{ma1*1000:.1f},{v2:.3f},{ma2*1000:.1f},{motor_left_command:.1f},{motor_right_command:.1f},{charge_remaining_s:.1f}"
                         sock.sendto(message.encode(), (PC_IP, PC_PORT))
-                        print(f"전송 -> 0x40: {v1:.2f}V/{ma1*1000:.0f}mA | 0x41: {v2:.2f}V/{ma2*1000:.0f}mA")
+                        print(f"전송 -> 0x40: {v1:.2f}V/{ma1*1000:.0f}mA | 0x41: {v2:.2f}V/{ma2*1000:.0f}mA | ChargeLeft: {charge_remaining_s:.1f}s")
                 else:
                     print("데이터 읽기 오류: 센서 배선을 확인하세요.")
             except Exception as e:

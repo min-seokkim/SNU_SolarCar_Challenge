@@ -103,8 +103,8 @@ ina_0x41 = INA226(address=0x41)
 # 주행 설정
 kp = 1.5
 ki = 0.01
-kd = 0.2
-base_speed = 95
+kd = 0.4
+base_speed = 100
 max_speed = 100
 min_speed = 50
 slowdown_gain = 0.75
@@ -123,6 +123,11 @@ race_duration_ms = 20 * 60 * 1000
 estimated_solar_scan_ms = 5000
 charge_finish_margin_ms = 5000
 charge_request_deadband_ms = 60000
+start_charge_lockout_ms = 3 * 60 * 1000
+post_charge_lockout_ms = 3 * 60 * 1000
+next_station_interval_ms = 36000
+next_station_energy_margin = 1.15
+normal_charge_reserve_stations = 2
 late_charge_disable_remaining_ms = 2 * 60 * 1000
 late_charge_limited_remaining_ms = 5 * 60 * 1000
 late_charge_max_stop_ms = 30000
@@ -172,6 +177,7 @@ last_seen_steering = 0
 lost_line_start_time = None
 stop_marker_armed = True
 charging_until_time = None
+next_charge_allowed_time = None
 stop_marker_ignore_until_time = None
 battery_voltage_filtered_v = None
 last_motor_current_a = 0
@@ -266,10 +272,41 @@ def battery_energy_remaining_wh(voltage_v):
 
     return usable_battery_energy_wh * soc
 
+def can_reach_next_station(voltage_v):
+    energy_remaining_wh = battery_energy_remaining_wh(voltage_v)
+    if energy_remaining_wh is None:
+        return True
+
+    motor_power_w = motor_power_for_command(max_speed)
+    required_energy_wh = (
+        motor_power_w
+        * (next_station_interval_ms / 3600000)
+        * next_station_energy_margin
+    )
+    return energy_remaining_wh >= required_energy_wh
+
+def reserve_energy_required_wh(station_count):
+    motor_power_w = motor_power_for_command(max_speed)
+    return (
+        motor_power_w
+        * (next_station_interval_ms * station_count / 3600000)
+        * next_station_energy_margin
+    )
+
 def race_remaining_ms(current_time):
     elapsed_ms = time.ticks_diff(current_time, race_start_time)
     remaining_ms = race_duration_ms - elapsed_ms
     return int(clamp(remaining_ms, 0, race_duration_ms))
+
+def charge_lockout_remaining_ms(current_time):
+    start_lockout_remaining = start_charge_lockout_ms - time.ticks_diff(current_time, race_start_time)
+    lockout_remaining = max(start_lockout_remaining, 0)
+
+    if next_charge_allowed_time is not None:
+        post_charge_remaining = time.ticks_diff(next_charge_allowed_time, current_time)
+        lockout_remaining = max(lockout_remaining, post_charge_remaining, 0)
+
+    return int(lockout_remaining)
 
 def charge_cap_for_remaining_time(remaining_ms):
     if remaining_ms <= late_charge_disable_remaining_ms:
@@ -298,12 +335,11 @@ def charge_duration_for_voltage(voltage_v, current_time):
     if energy_remaining_wh is None:
         return int(clamp(charge_stop_ms, 0, max_charge_ms))
 
-    available_after_scan_h = (
-        (remaining_ms - estimated_solar_scan_ms)
-        / 3600000
-    )
     motor_power_w = motor_power_for_command(base_speed)
-    needed_energy_wh = motor_power_w * available_after_scan_h - energy_remaining_wh
+    needed_energy_wh = (
+        reserve_energy_required_wh(normal_charge_reserve_stations)
+        - energy_remaining_wh
+    )
     if needed_energy_wh <= 0:
         return 0
 
@@ -457,29 +493,36 @@ try:
             if raw_battery_voltage is not None:
                 update_battery_voltage(raw_battery_voltage, raw_motor_current)
             policy_voltage = station_policy_voltage(raw_battery_voltage, raw_motor_current)
-            charge_duration_ms = charge_duration_for_voltage(policy_voltage, current_time)
 
-            if charge_duration_ms <= 0:
+            charge_lockout_ms = charge_lockout_remaining_ms(current_time)
+            lockout_can_be_applied = charge_lockout_ms > 0 and can_reach_next_station(policy_voltage)
+            if lockout_can_be_applied:
                 stop_marker_ignore_until_time = time.ticks_add(current_time, stop_marker_ignore_ms)
-                print(f"Stop marker skipped. Battery={format_voltage(policy_voltage)}")
+                print(f"Stop marker skipped. Charge lockout {charge_lockout_ms // 1000}s left.")
             else:
-                pid_integral = 0
-                pid_previous_error = 0
-                pid_has_previous_error = False
-                lost_line_start_time = None
-                motor_left_command = reverse_brake_left_speed
-                motor_right_command = reverse_brake_right_speed
-                motor.set_speed(motor_left_command, motor_right_command)
-                time.sleep_ms(reverse_brake_ms)
-                motor_left_command = 0
-                motor_right_command = 0
-                motor.set_speed(motor_left_command, motor_right_command)
-                print(f"Stop marker detected. Battery={format_voltage(policy_voltage)}. Optimizing solar angle...")
-                scan_best_solar_angle()
-                current_time = time.ticks_ms()
-                last_pid_time = current_time
-                charging_until_time = time.ticks_add(current_time, charge_duration_ms)
-                print(f"Charging for {charge_duration_ms // 1000}s...")
+                charge_duration_ms = charge_duration_for_voltage(policy_voltage, current_time)
+
+                if charge_duration_ms <= 0:
+                    stop_marker_ignore_until_time = time.ticks_add(current_time, stop_marker_ignore_ms)
+                    print(f"Stop marker skipped. Battery={format_voltage(policy_voltage)}")
+                else:
+                    pid_integral = 0
+                    pid_previous_error = 0
+                    pid_has_previous_error = False
+                    lost_line_start_time = None
+                    motor_left_command = reverse_brake_left_speed
+                    motor_right_command = reverse_brake_right_speed
+                    motor.set_speed(motor_left_command, motor_right_command)
+                    time.sleep_ms(reverse_brake_ms)
+                    motor_left_command = 0
+                    motor_right_command = 0
+                    motor.set_speed(motor_left_command, motor_right_command)
+                    print(f"Stop marker detected. Battery={format_voltage(policy_voltage)}. Optimizing solar angle...")
+                    scan_best_solar_angle()
+                    current_time = time.ticks_ms()
+                    last_pid_time = current_time
+                    charging_until_time = time.ticks_add(current_time, charge_duration_ms)
+                    print(f"Charging for {charge_duration_ms // 1000}s...")
 
         if charging_until_time is not None:
             if time.ticks_diff(charging_until_time, current_time) > 0:
@@ -494,6 +537,7 @@ try:
                 skip_drive_control = True
             else:
                 charging_until_time = None
+                next_charge_allowed_time = time.ticks_add(current_time, post_charge_lockout_ms)
                 stop_marker_ignore_until_time = time.ticks_add(current_time, stop_marker_ignore_ms)
                 print("Charging done. Resuming...")
                 
